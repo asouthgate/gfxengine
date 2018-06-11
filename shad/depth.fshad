@@ -1,0 +1,12 @@
+#version 330 core
+
+//layout (location = 0) out float depth;
+layout (location = 0) out vec4 depth;
+
+
+in vec4 frag_pos_lightspace;
+
+void main() {             	
+        depth = frag_pos_lightspace.z * vec4(1.0f);
+//        depth = gl_FragCoord.z;
+}  

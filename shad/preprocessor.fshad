@@ -1,0 +1,61 @@
+#version 330 core
+struct G_buffer {
+	sampler2D position_map;
+	sampler2D normal_map;
+	sampler2D albedo_map;
+};
+
+layout (location = 0) out vec4 color;
+layout (location = 1) out vec4 brights;
+
+in vec2 UVs;
+
+uniform sampler2D spotlight_map;
+uniform sampler2D backdrop;
+uniform float n_pointlights;
+uniform vec4 pointlight_colours[10];
+uniform vec3 pointlight_positions[10];
+uniform vec3 camera_position;
+uniform G_buffer g;
+const float attenuation = 50.0f;
+const float ambient_brightness = 0.4f;
+
+void main() {
+	vec4 gpos = texture(g.position_map, UVs);
+	vec4 gnorm = texture(g.normal_map, UVs);
+	vec4 galb = texture(g.albedo_map, UVs);
+
+	//***** Pointlights and spotlights
+	float spec = 0.0f;
+	vec3 pointlights = vec3(0.0f);
+	for (int i = 0; i < n_pointlights; i++) {
+		vec3 pos = pointlight_positions[i];
+		vec3 f2l = pos - gpos.xyz;
+		vec3 f2c = camera_position - gpos.xyz;
+		vec3 h = normalize(f2l + f2c);
+		float dist = (1 + attenuation * length(f2l));
+		float strength = pointlight_colours[i].a;
+		vec4 plc = pointlight_colours[i];
+		pointlights += strength * plc.xyz*(1.0f/dist);
+		spec += strength * (2/dist) * pow(dot(h, gnorm.xyz), 10.0f);
+	}
+	vec4 pl4 = vec4(pointlights, 0.0f);
+	vec4 spotlights = texture(spotlight_map, UVs);
+
+	//***** Diffuse, ambient, and specular
+	vec4 diff = spotlights;
+	vec4 ambient = ambient_brightness * vec4(normalize(pointlights),1.0f);
+	vec4 specular = spec*vec4(1.0f);	
+
+	//***** Final color
+	color = spotlights + ambient + max(diff, 0.0f) * galb.a + (pl4+spec)*galb;
+	color = spotlights;
+	vec4 brightness = color;
+	float L = dot(brightness.rgb, vec3(0.2126, 0.7152, 0.0722));
+	if (L > 3.0) {
+		brights = brightness;
+	}
+	else {
+		brights = vec4(0.0f);
+	}	
+}

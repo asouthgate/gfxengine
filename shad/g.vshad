@@ -1,0 +1,22 @@
+#version 330 core
+#extension GL_ARB_separate_shader_objects : enable
+layout(location = 0) in vec3 vertex_pos_modelspace;
+layout(location = 1) in vec2 UV_pos;
+layout(location = 2) in vec3 normal_vectors;
+
+out vec4 frag_pos;
+out vec2 UVs;
+out vec3 transformed_normals;
+out vec4 model_pos;
+
+uniform mat4 PVM;
+uniform mat4 modM;
+uniform mat4 inverse_modM;
+
+void main() {
+	frag_pos = PVM * vec4(vertex_pos_modelspace,1);
+	gl_Position = frag_pos;
+	UVs = UV_pos;
+	transformed_normals = normalize(mat3(inverse_modM) * normal_vectors);
+	model_pos = modM * vec4(vertex_pos_modelspace,1);	
+}

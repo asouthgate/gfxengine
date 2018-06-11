@@ -1,0 +1,65 @@
+#version 330 core
+
+in vec4 frag_pos_lightspace;
+
+out vec4 color;
+
+struct G_buffer {
+	sampler2D normal_map;
+	sampler2D albedo_map;
+	sampler2D position_map;
+};
+
+uniform sampler2D depth_map;
+
+uniform sampler2D scene;
+uniform sampler2D backdrop;
+uniform vec3 light_pos;
+uniform vec3 light_colour;
+uniform vec3 camera_position;
+uniform G_buffer g;
+uniform float window_width;
+uniform float window_height;
+
+void main() {
+	float current_depth = frag_pos_lightspace.z;
+	vec2 UVs = vec2(gl_FragCoord.x/window_width, gl_FragCoord.y/window_height);
+	vec4 gpos = texture(g.position_map, UVs);
+	vec4 gnorm = texture(g.normal_map, UVs);
+        vec4 prev_scene = texture(scene, UVs);
+	vec3 atn = normalize(gnorm.rgb);
+	vec3 l2f = normalize(light_pos.rgb-gpos.rgb);
+	float diffuse_strength = abs(dot(atn, l2f));
+
+	vec4 galb = texture(g.albedo_map, UVs);
+	if (galb.a == 0.0f) {
+		discard;
+	}
+
+	vec2 light_proj_coords = frag_pos_lightspace.xy;
+	light_proj_coords = (light_proj_coords+1.0f)/2.0f;
+//        float bias = 0.0005*acos(diffuse_strength) + 0.01;
+        float bias = 0.01;
+	float min_depth_m = texture(depth_map, light_proj_coords).z;
+        min_depth_m = (current_depth-bias < min_depth_m) ? 1.0f : 0.0f;
+
+        //***** Ditch any lighting that is on the opposite face
+        if (dot(l2f, atn) < 0) {
+                min_depth_m = 0.0f;
+        }
+
+	//***** Eliminate shadow acne
+	float ambient_strength = 0.2f;
+	vec3 ambient = ambient_strength*light_colour*galb.rgb;
+
+	//***** Specular
+	vec3 viewDir = normalize(camera_position.xyz - gpos.rgb);
+	vec3 reflectDir = reflect(-l2f, gnorm.rgb);  
+	float spec_strength = pow(max(dot(viewDir, reflectDir), 0.0), 32);
+
+	//***** Final result
+	vec3 result = ((diffuse_strength+spec_strength)*min_depth_m + ambient_strength)*light_colour;
+//	vec3 result = 1.0f*min_depth_m*light_colour;      
+
+	color = vec4(result, 1.0f);
+}

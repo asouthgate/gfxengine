@@ -1,0 +1,24 @@
+#version 330 core
+
+layout (location = 0) out vec4 local_position;
+layout (location = 1) out vec4 normal;
+layout (location = 2) out vec4 albedo;
+
+in vec4 frag_pos;
+in vec3 transformed_normals;
+in vec2 UVs;
+in vec4 model_pos;
+
+struct Material {
+	sampler2D texture;
+	sampler2D diffuse;
+};
+
+uniform Material material;
+
+void main() {
+	local_position = model_pos;
+	normal = vec4(transformed_normals, 1.0f);
+	albedo.rgb = texture(material.texture, UVs).rgb;
+	albedo.a = texture(material.diffuse, UVs).r;
+}

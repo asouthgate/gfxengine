@@ -1,0 +1,316 @@
+#version 330 core
+
+in vec2 UV;
+
+out vec4 color;
+
+//***** Image quantities
+uniform sampler2D image;
+uniform int window_width;
+uniform int window_height;
+float pixel_height = 1.0/window_height;
+float pixel_width = 1.0/window_width;
+
+//***** Constants for edge searching
+const vec3 lumvec = vec3(0.212, 0.715, 0.0722);
+const float MIN_EDGE = 0.031;
+const float MAX_EDGE = 0.105;
+
+const int MAX_STEPS = 15;
+
+//***** Cutoff for variance in determining the end of an edge
+const float EPSILON = 0.1;
+
+float luminance(vec3 rgb) {
+        //***** Luminance function, removing negatives
+	vec3 rgb_no_neg = vec3(max(rgb.r, 0), max(rgb.g, 0), max(rgb.b, 0));
+	return dot(rgb_no_neg,lumvec);
+}
+
+void main() {	
+	vec4 mid = texture(image,UV);	
+	float mid_lum = luminance(mid.rgb);
+	vec4 mu_tex = texture(image,vec2(UV.x, UV.y + pixel_height));
+	float mu = luminance(mu_tex.rgb);
+	vec4 mr_tex = texture(image,vec2(UV.x + pixel_width, UV.y));
+	float mr = luminance(mr_tex.rgb);
+	vec4 mb_tex = texture(image,vec2(UV.x, UV.y - pixel_height));
+	float mb = luminance(mb_tex.rgb);
+	vec4 ml_tex =  texture(image,vec2(UV.x - pixel_width, UV.y));
+	float ml = luminance(ml_tex.rgb);
+
+	//***** Not the most efficient way to do this, 4 if statements may be better
+	float min_lum = min(mid_lum, min(mu, min(mr, min(mb, ml))));
+	float max_lum = max(mid_lum, max(mu, max(mr, max(mb, ml))));
+
+	//***** Now max
+	float max_dl = max_lum - min_lum;
+
+	//***** Abandon if too dark or too low contrast
+	if (max_dl < max(MIN_EDGE, max_lum * MAX_EDGE) || max_dl < EPSILON) {
+		color = mid;
+		return;
+	}
+
+	//***** Otherwise, move on to the next part, sample the 4 diagonal adjacent pixels
+	vec4 ur_tex = texture(image,vec2(UV.x + pixel_width, UV.y + pixel_height));
+	float ur = luminance(ur_tex.rgb);
+	vec4 ul_tex = texture(image,vec2(UV.x - pixel_width, UV.y + pixel_height));
+	float ul = luminance(ul_tex.rgb);
+	vec4 br_tex = texture(image,vec2(UV.x + pixel_width, UV.y - pixel_height));
+	float br = luminance(br_tex.rgb);
+	vec4 bl_tex = texture(image,vec2(UV.x - pixel_width, UV.y - pixel_height));
+	float bl = luminance(bl_tex.rgb);
+	
+	float sum_vert = mu + mb;
+	float sum_hoz = ml + mr;
+	float sum_bcorn = bl + br;
+	float sum_lcorn = bl + ul;
+	float sum_rcorn = br + ur;
+	float sum_ucorn = ur + ul;
+
+	//***** Direction decision: can be simplified for low poly?
+	float hoz = abs(sum_lcorn-2*ml) + 2*abs(sum_vert-2*mid_lum) + abs(sum_rcorn-2*mr);
+	float vert = abs(sum_ucorn-2*mu) + 2*abs(sum_hoz-2*mid_lum) + abs(sum_bcorn-2*mb);
+
+	bool is_horizontal = (hoz >= vert);
+
+//**************************************************
+//***** DEBUG FOR DIRECTION TESTING: WORKS
+//	if (is_horizontal) {
+//		color = vec4(0.0f, 0.0f, 1.0f, 1.0f);
+//	}
+//	else {
+//		color = vec4(1.0f, 0.0f, 0.0f, 1.0f);
+//	}
+//	return;
+//**************************************************
+
+//***** Select Highest Contrast Pixel Pair
+//***** Neg and pos refer to orientation: pos is up or right
+	float luma_pos = is_horizontal ? mu : mr;
+	float luma_neg = is_horizontal ? mb : ml;
+	float grad_pos = abs(luma_pos - mid_lum);
+	float grad_neg = abs(luma_neg - mid_lum);
+	bool is_positive = grad_pos >= grad_neg;
+	int orientation = is_positive ? 1 : -1;
+        
+//***** Simply blend any lines one pixel thick, or likewise dots
+        if (grad_pos > EPSILON && grad_neg > EPSILON) {
+                color = is_horizontal ? (mu_tex + mb_tex)*0.5f : (ml_tex + mr_tex)*0.5f;
+                return;
+        }
+
+//**************************************************
+//***** Debug grad direction
+//	color = vec4(1+orientation, 0.0f, abs(1-orientation), 1.0f);
+//	return;
+//**************************************************
+
+//***** Define initial quantities and walk parameters
+	vec2 left_edge_step = is_horizontal ? vec2(pixel_width, 0.0f) : -1*vec2(0.0f, pixel_height);
+
+//**************************************************
+//***** Debug edge step
+//	color = vec4(left_edge_step.r/pixel_width, 0.0f, -1*left_edge_step.g/pixel_height, 1.0f);
+//	return;
+//**************************************************
+
+	float avg_initial_luma = (is_positive ? luma_pos : luma_neg) + mid_lum;
+	avg_initial_luma /= 2.0f;
+	float initial_diff_luma = is_positive ? grad_pos : grad_neg;
+	float initial_var_luma = initial_diff_luma/avg_initial_luma;
+	vec2 partner_step = orientation*(is_horizontal ? vec2(0.0f, pixel_height) : vec2(pixel_width, 0.0f));
+	vec4 initial_partner = texture(image, UV+partner_step);
+	float initial_partner_luma = luminance(initial_partner.rgb);
+
+//**************************************************
+//***** Debug neighbour offset
+//	if (is_positive) {
+//		color = vec4(partner_step.r/pixel_width, 0.0f, partner_step.g/pixel_height, 1.0f);
+//	}
+//	else {
+//		color = -1*vec4(partner_step.r/pixel_width, -1.0f, partner_step.g/pixel_height, 1.0f);
+//	}
+//	return;
+//**************************************************
+
+        //***** Initialize to zero
+	bool reached_left = false;
+	vec2 curr_uv = UV;
+	float prev_var = initial_var_luma;
+	int n_steps_left = 1;
+	vec2 curr_UV = UV;
+	vec4 prev_partner = initial_partner;
+	float prev_partner_luma = initial_partner_luma;
+	float prev_mid_luma = mid_lum;
+	bool mid_collides_left = false;
+	bool partner_collides_left = false;
+	float mid_dl = 0.0f;
+	float partner_dl = 0.0f;
+	vec4 left_falloff_color;
+	
+        //***** Now walk
+	if (!reached_left) {
+		for (int i = 0; i < MAX_STEPS; ++i) {
+			curr_UV -= left_edge_step;
+			vec4 curr_mid = texture(image,curr_UV);	
+			vec4 curr_partner = texture(image, curr_UV + partner_step);
+			float curr_mid_luma = luminance(curr_mid.rgb);
+			float curr_partner_luma = luminance(curr_partner.rgb);
+			float curr_dl = abs(curr_mid_luma-curr_partner_luma);
+			float curr_avg_luma = (curr_mid_luma + curr_partner_luma)/2.0f;
+			float curr_var = curr_dl/curr_avg_luma;		
+			n_steps_left += 1;
+			
+			if (abs(curr_mid_luma-prev_mid_luma) < EPSILON && abs(curr_partner_luma-prev_partner_luma) < EPSILON ) {
+				//***** Keep going
+				prev_var = curr_var;
+				prev_partner_luma = curr_partner_luma;
+				prev_mid_luma = curr_mid_luma;
+			}
+			else {
+				//***** Test if most of the difference is the particle or its neighbour
+				mid_dl = abs(curr_mid_luma-prev_mid_luma);
+				partner_dl = abs(curr_partner_luma-prev_partner_luma);
+				mid_collides_left = mid_dl >= EPSILON;
+				reached_left = true;
+				left_falloff_color = mid_collides_left ? curr_partner : curr_mid;
+				break;
+			}
+		}
+	}
+
+//**************************************************
+//***** Debug distance to left edge
+//	color =  vec4(float(n_steps_left)/float(MAX_STEPS));
+//	return;
+//**************************************************
+
+//**************************************************
+//***** Debug mid falls off and distance
+//	if (mid_collides_left) {
+//		color = vec4(1.0f, 0.0f, 0.f, 1.0f);
+//	}
+//	else {
+//		color = mid;
+//	}
+//	return;
+//**************************************************
+
+	curr_UV = UV;
+	prev_var = initial_var_luma;
+	prev_mid_luma = mid_lum;
+	prev_partner_luma = initial_partner_luma;
+	bool reached_right = false;
+	prev_partner = initial_partner;
+	bool mid_collides_right = false;
+	bool partner_collides_right = false;
+	mid_dl = 0.0f;
+	partner_dl = 0.0f;
+	int n_steps_right = 0;
+	vec4 right_falloff_color; 
+
+	if (!reached_right) {
+		for (int i = 0; i < MAX_STEPS; ++i) {
+			curr_UV += left_edge_step;
+			vec4 curr_mid = texture(image,curr_UV);	
+			vec4 curr_partner = texture(image, curr_UV + partner_step);
+			float curr_mid_luma = luminance(curr_mid.rgb);
+			float curr_partner_luma = luminance(curr_partner.rgb);
+			float curr_dl = abs(curr_mid_luma-curr_partner_luma);
+			float curr_avg_luma = (curr_mid_luma + curr_partner_luma)/2.0f;
+			float curr_var = curr_dl/curr_avg_luma;		
+			n_steps_right += 1;
+			
+			if (abs(curr_mid_luma-prev_mid_luma) < EPSILON && abs(curr_partner_luma-prev_partner_luma) < EPSILON ) {
+				//Keep going
+				prev_var = curr_var;
+				prev_partner_luma = curr_partner_luma;
+				prev_mid_luma = curr_mid_luma;
+			}
+			else {
+				// Test if most of the difference is the particle or its neighbour
+				mid_dl = abs(curr_mid_luma-prev_mid_luma);
+				partner_dl = abs(curr_partner_luma-prev_partner_luma);
+				mid_collides_right = mid_dl >= EPSILON;
+				reached_right = true;
+				right_falloff_color = mid_collides_left ? curr_mid : curr_partner;
+				break;
+			}
+
+		}
+	}
+
+//**************************************************
+//***** Debug distance to right edge
+//	color =  vec4(float(n_steps_right)/float(MAX_STEPS));
+//	return;
+//**************************************************
+
+//**************************************************
+//***** Debug which partner "falls off" right edge
+//	if (mid_collides_right) {
+//		color = 0.5f*(vec4(1.0f, 0.0f, 0.f, 1.0f)+mid);
+//	}
+//	else {
+//		color = mid;
+//	}
+//	return;
+//**************************************************
+
+//**************************************************
+//***** Debug both collisions
+//	color = mid;
+//	if (mid_collides_left) {
+//		color = 0.5f*(vec4(0.0f, 0.0f, 1.f, 1.0f)+mid);
+//	}
+//	if (mid_collides_right) {
+//		color = 0.5f*(vec4(1.0f, 0.0f, 0.f, 1.0f)+mid);
+//	}
+//	return;
+//**************************************************
+
+        //***** Each pixel correctly knows if its segment collides left or right
+        //***** Now need to get total length
+	float length = float(n_steps_left + n_steps_right);
+
+//**************************************************
+//***** Debug collision length distance both ways
+//	color = mid;
+//	if (mid_collides_left && !mid_collides_right) {
+//		color = 0.5*(mid+vec4(float(n_steps_left)/float(length), 0.0f, 0.0f, 1.0f));
+//	}
+//	if (mid_collides_right && !mid_collides_left) {
+//		color = 0.5*(vec4(0.0f, 0.0f, float(n_steps_right)/float(length), 1.0f) + mid);
+//
+//	}
+//	if (mid_collides_right && mid_collides_left) {
+//		color = 0.5*(vec4(float(n_steps_left)/float(length), 0.0f, float(n_steps_left)/float(length), 1.0f) + mid);
+//
+//	}
+//	return;
+//**************************************************
+
+        //***** Amount to blend is n_steps to collision 0.5*L-steps*(1/L)
+	float weight = 0.0f;
+	color = mid;
+        if (length == 0.0f) {
+                color = 0.5f*(mid + initial_partner);
+                return;
+        }
+
+	if (mid_collides_left && n_steps_left <= n_steps_right) {
+		weight = (1.0f/float(length))*(0.5f*length-n_steps_left);
+                color = (1-weight)*mid + weight*initial_partner;
+                return;
+	}
+	else if (mid_collides_right && n_steps_right <= n_steps_left) {
+		weight = (1.0f/float(length))*(0.5f*length-n_steps_right);
+                color = (1-weight)*mid + weight*initial_partner;
+                return;
+	}
+   
+	color = (1-weight)*mid + weight*initial_partner;
+}
+
